@@ -1,19 +1,15 @@
 import os
 import anthropic
+import requests
 from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
 from apscheduler.schedulers.background import BackgroundScheduler
-from twilio.rest import Client
-import datetime
 import pytz
 
 app = Flask(__name__)
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
-TWILIO_WHATSAPP_NUMBER = os.environ.get('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+14155238886')
-RECIPIENT_WHATSAPP = os.environ.get('RECIPIENT_WHATSAPP')
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -21,65 +17,57 @@ SYSTEM_PROMPT = """אתה שירות מידע על שוק ההון בסגנון 
 כתוב בעברית בלבד, ללא אמוג'י.
 הסגנון: עובדתי, מספרי, תמציתי.
 חתום תמיד: hotstocks
-הוסף תמיד בסוף: אין בנכתב המלצה לקניה/מכירה של ניירות ערך
-דוח בוקר: סקירת מדדים מרכזיים, מגמה, מניות מובילות.
-דוח סגירה: סיכום יומי עם נתונים.
-תשובות לשאלות: קצרות, עובדתיות, עם מספרים."""
+הוסף תמיד בסוף: אין בנכתב המלצה לקניה/מכירה של ניירות ערך"""
 
-def generate_market_report(report_type="morning"):
-    if report_type == "morning":
-        prompt = "כתוב דוח בוקר לשוק המניות האמריקאי. כלול: מדד S&P500, נאסד, דאו גונס - מגמה צפויה, חדשות מרכזיות."
+def generate_market_report(report_type='morning'):
+    if report_type == 'morning':
+        prompt = 'כתוב דוח בוקר לשוק המניות האמריקאי. כלול: S&P500, נאסד, דאו - מגמה צפויה.'
     else:
-        prompt = "כתוב דוח סגירה לשוק המניות האמריקאי. כלול: ביצועי מדדים מרכזיים, מניות מובילות, סיכום מגמה."
-    
-    message = anthropic_client.messages.create(
-        model="claude-opus-4-5",
+        prompt = 'כתוב דוח סגירה לשוק המניות האמריקאי. כלול: ביצועי מדדים, מניות מובילות.'
+    msg = anthropic_client.messages.create(
+        model='claude-opus-4-5',
         max_tokens=500,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{'role': 'user', 'content': prompt}],
         system=SYSTEM_PROMPT
     )
-    return message.content[0].text
+    return msg.content[0].text
 
-def send_whatsapp_message(body, to=None):
-    if not to:
-        to = RECIPIENT_WHATSAPP
-    if not to:
+def send_telegram(text, chat_id=None):
+    cid = chat_id or TELEGRAM_CHAT_ID
+    if not cid or not TELEGRAM_BOT_TOKEN:
         return
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    client.messages.create(body=body, from_=TWILIO_WHATSAPP_NUMBER, to=to)
+    requests.post(f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
+                  json={'chat_id': cid, 'text': text})
 
 def send_morning_report():
-    report = generate_market_report("morning")
-    send_whatsapp_message(report)
+    send_telegram(generate_market_report('morning'))
 
 def send_closing_report():
-    report = generate_market_report("closing")
-    send_whatsapp_message(report)
+    send_telegram(generate_market_report('closing'))
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    incoming_msg = request.values.get('Body', '').strip()
-    resp = MessagingResponse()
-    msg = resp.message()
-    if incoming_msg:
-        response = anthropic_client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=300,
-            messages=[{"role": "user", "content": incoming_msg}],
-            system=SYSTEM_PROMPT
-        )
-        msg.body(response.content[0].text)
-    else:
-        msg.body("שלום! אני בוט מידע על שוק ההון. שאל אותי כל שאלה על מניות ומדדים.")
-    return str(resp)
+    data = request.get_json()
+    if data and 'message' in data:
+        cid = str(data['message']['chat']['id'])
+        text = data['message'].get('text', '')
+        if text:
+            resp = anthropic_client.messages.create(
+                model='claude-opus-4-5',
+                max_tokens=300,
+                messages=[{'role': 'user', 'content': text}],
+                system=SYSTEM_PROMPT
+            )
+            send_telegram(resp.content[0].text, chat_id=cid)
+    return 'OK', 200
 
 @app.route('/health', methods=['GET'])
 def health():
-    return "OK", 200
+    return 'OK', 200
 
 if __name__ == '__main__':
-    israel_tz = pytz.timezone('Asia/Jerusalem')
-    scheduler = BackgroundScheduler(timezone=israel_tz)
+    tz = pytz.timezone('Asia/Jerusalem')
+    scheduler = BackgroundScheduler(timezone=tz)
     scheduler.add_job(send_morning_report, 'cron', day_of_week='sun-thu', hour=9, minute=15)
     scheduler.add_job(send_closing_report, 'cron', day_of_week='sun-thu', hour=23, minute=30)
     scheduler.start()
