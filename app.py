@@ -10,7 +10,7 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
-SYSTEM_PROMPT = "Hebrew stock market news bot. Write in Hebrew only, no emojis, factual style. Sign: hotstocks. End with disclaimer."
+SYSTEM_PROMPT = "Hebrew stock market bot. Write in Hebrew only, no emojis. Sign: hotstocks. Disclaimer at end."
 
 def call_claude(prompt, max_tokens=500):
     headers = {
@@ -39,11 +39,8 @@ def send_telegram(text, chat_id=None):
     cid = chat_id or TELEGRAM_CHAT_ID
     if not cid or not TELEGRAM_BOT_TOKEN:
         return
-    requests.post(
-        f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
-        json={'chat_id': cid, 'text': text},
-        timeout=10
-    )
+    url = 'https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendMessage'
+    requests.post(url, json={'chat_id': cid, 'text': text}, timeout=10)
 
 def send_morning_report():
     send_telegram(generate_market_report('morning'))
