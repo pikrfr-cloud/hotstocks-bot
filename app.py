@@ -16,14 +16,6 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
 logger.info('GEMINI_API_KEY present: %s', bool(GEMINI_API_KEY))
 
-SYSTEM_PROMPT = (
-    'You are a Hebrew stock market news bot in the style of HotStocks. '
-    'Always write in Hebrew only, no emojis. '
-    'Sign at the end: hotstocks. '
-    'End every message with: \u05d0\u05d9\u05df \u05d1\u05e0\u05db\u05ea\u05d1 \u05d4\u05de\u05dc\u05e6\u05d4 \u05dc\u05e7\u05e0\u05d9\u05d4/\u05de\u05db\u05d9\u05e8\u05d4 \u05e9\u05dc \u05e0\u05d9\u05d9\u05e8\u05d5\u05ea \u05e2\u05e8\u05da'
-)
-
-# Models in order of preference
 MODELS = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
@@ -31,13 +23,38 @@ MODELS = [
     'gemini-2.0-flash-lite-001',
 ]
 
-def call_gemini(prompt, max_tokens=500):
+SIGN = '\nhotstocks\nאין בנכתב המלצה לקניה/מכירה של ניירות ערך'
+
+
+def build_prompt(user_text, report_type=None):
+    footer = 'hotstocks\nאין בנכתב המלצה לקניה/מכירה של ניירות ערך'
+    if report_type == 'morning':
+        return (
+            'כתוב דוח בוקר קצר לשוק ההון הישראלי והעולמי. '
+            'עברית בלבד, ללא אמוגים, מקצועי. '
+            f'בסיום כתוב בדיוק:\n{footer}'
+        )
+    if report_type == 'closing':
+        return (
+            'כתוב דוח סגירה קצר לשוק ההון הישראלי והעולמי. '
+            'עברית בלבד, ללא אמוגים, מקצועי. '
+            f'בסיום כתוב בדיוק:\n{footer}'
+        )
+    return (
+        'אתה בוט שוק ההון בסגנון הוט סטוק. '
+        'ענה תמיד בעברית בלבד, ללא אמוגים. '
+        'אם ההודעה לא ברורה - פרש אותה כשאלה על שוק ההון וענה. '
+        f'בסיום כתוב בדיוק:\n{footer}\n\n'
+        f'הודעה: {user_text}'
+    )
+
+
+def call_gemini(prompt, max_tokens=600):
     if not GEMINI_API_KEY:
-        return '\u05e9\u05d2\u05d9\u05d0\u05d4: \u05de\u05e4\u05ea\u05d7 API \u05d7\u05e1\u05e8'
+        return 'שגיאה: מפתח API חסר'
     for model in MODELS:
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}'
         data = {
-            'systemInstruction': {'parts': [{'text': SYSTEM_PROMPT}]},
             'contents': [{'parts': [{'text': prompt}]}],
             'generationConfig': {'maxOutputTokens': max_tokens}
         }
@@ -45,7 +62,10 @@ def call_gemini(prompt, max_tokens=500):
             resp = requests.post(url, json=data, timeout=60)
             logger.info('Gemini %s: %s', model, resp.status_code)
             if resp.status_code == 200:
-                return resp.json()['candidates'][0]['content']['parts'][0]['text']
+                text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+                if 'hotstocks' not in text:
+                    text += SIGN
+                return text
             elif resp.status_code == 429:
                 logger.warning('Rate limited on %s, trying next', model)
                 continue
@@ -55,14 +75,8 @@ def call_gemini(prompt, max_tokens=500):
         except Exception as e:
             logger.error('Exception on %s: %s', model, str(e))
             continue
-    return '\u05e9\u05d9\u05e8\u05d5\u05ea \u05d0\u05d9 \u05d6\u05de\u05d9\u05df \u05e8\u05d2\u05e2, \u05e0\u05e1\u05d4 \u05e9\u05d5\u05d1 \u05de\u05d0\u05d5\u05d7\u05e8'
+    return 'שירות אי זמין רגע, נסה שוב מאוחר'
 
-def generate_market_report(report_type='morning'):
-    if report_type == 'morning':
-        prompt = '\u05db\u05ea\u05d5\u05d1 \u05d3\u05d5\u05d7 \u05d1\u05d5\u05e7\u05e8 \u05e7\u05e6\u05e8 \u05e2\u05dc \u05e9\u05d5\u05e7 \u05d4\u05d4\u05d5\u05df.'
-    else:
-        prompt = '\u05db\u05ea\u05d5\u05d1 \u05d3\u05d5\u05d7 \u05e1\u05d2\u05d9\u05e8\u05d4 \u05e7\u05e6\u05e8 \u05e2\u05dc \u05e9\u05d5\u05e7 \u05d4\u05d4\u05d5\u05df.'
-    return call_gemini(prompt, max_tokens=800)
 
 def send_telegram(text, chat_id=None):
     cid = chat_id or TELEGRAM_CHAT_ID
@@ -75,11 +89,14 @@ def send_telegram(text, chat_id=None):
     except Exception as e:
         logger.error('Telegram error: %s', str(e))
 
+
 def send_morning_report():
-    send_telegram(generate_market_report('morning'))
+    send_telegram(call_gemini(build_prompt(None, 'morning'), max_tokens=800))
+
 
 def send_closing_report():
-    send_telegram(generate_market_report('closing'))
+    send_telegram(call_gemini(build_prompt(None, 'closing'), max_tokens=800))
+
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -88,17 +105,20 @@ def webhook():
         if data and 'message' in data:
             cid = str(data['message']['chat']['id'])
             text = data['message'].get('text', '')
-            logger.info('Msg from %s: %s', cid, text[:50])
+            logger.info('Msg from %s: %s', cid, text[:80])
             if text:
-                resp = call_gemini(text, max_tokens=300)
+                prompt = build_prompt(text)
+                resp = call_gemini(prompt, max_tokens=500)
                 send_telegram(resp, chat_id=cid)
     except Exception as e:
         logger.error('Webhook error: %s', str(e))
     return 'OK', 200
 
+
 @app.route('/health', methods=['GET'])
 def health():
     return 'OK', 200
+
 
 tz = pytz.timezone('Asia/Jerusalem')
 scheduler = BackgroundScheduler(timezone=tz)
