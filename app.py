@@ -19,14 +19,16 @@ logger.info('GEMINI_API_KEY present: %s', bool(GEMINI_API_KEY))
 SYSTEM_PROMPT = (
     'You are a Hebrew stock market news bot in the style of HotStocks. '
     'Always write in Hebrew only, no emojis. '
-    'Always sign at the end: hotstocks. '
-    'Always end with: \u05d0\u05d9\u05df \u05d1\u05e0\u05db\u05ea\u05d1 \u05d4\u05de\u05dc\u05e6\u05d4 \u05dc\u05e7\u05e0\u05d9\u05d4/\u05de\u05db\u05d9\u05e8\u05d4 \u05e9\u05dc \u05e0\u05d9\u05d9\u05e8\u05d5\u05ea \u05e2\u05e8\u05da'
+    'Sign at the end: hotstocks. '
+    'End every message with: \u05d0\u05d9\u05df \u05d1\u05e0\u05db\u05ea\u05d1 \u05d4\u05de\u05dc\u05e6\u05d4 \u05dc\u05e7\u05e0\u05d9\u05d4/\u05de\u05db\u05d9\u05e8\u05d4 \u05e9\u05dc \u05e0\u05d9\u05d9\u05e8\u05d5\u05ea \u05e2\u05e8\u05da'
 )
 
+# Models in order of preference
 MODELS = [
-    'gemini-2.0-flash-lite',
+    'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-1.5-flash-latest',
+    'gemini-2.0-flash-001',
+    'gemini-2.0-flash-lite-001',
 ]
 
 def call_gemini(prompt, max_tokens=500):
@@ -41,19 +43,19 @@ def call_gemini(prompt, max_tokens=500):
         }
         try:
             resp = requests.post(url, json=data, timeout=60)
-            logger.info('Gemini %s status: %s', model, resp.status_code)
+            logger.info('Gemini %s: %s', model, resp.status_code)
             if resp.status_code == 200:
                 return resp.json()['candidates'][0]['content']['parts'][0]['text']
             elif resp.status_code == 429:
-                logger.warning('Rate limited on %s, trying next model', model)
+                logger.warning('Rate limited on %s, trying next', model)
                 continue
             else:
-                logger.error('Gemini error on %s: %s', model, resp.text[:200])
+                logger.error('Error on %s: %s', model, resp.text[:100])
                 continue
         except Exception as e:
-            logger.error('Gemini exception on %s: %s', model, str(e))
+            logger.error('Exception on %s: %s', model, str(e))
             continue
-    return '\u05e9\u05d9\u05e8\u05d5\u05ea \u05d0\u05d9 \u05d6\u05de\u05d9\u05df \u05db\u05e8\u05d2\u05e2, \u05e0\u05e1\u05d4 \u05e9\u05d5\u05d1 \u05de\u05d0\u05d5\u05d7\u05e8 \u05d9\u05d5\u05ea\u05e8'
+    return '\u05e9\u05d9\u05e8\u05d5\u05ea \u05d0\u05d9 \u05d6\u05de\u05d9\u05df \u05e8\u05d2\u05e2, \u05e0\u05e1\u05d4 \u05e9\u05d5\u05d1 \u05de\u05d0\u05d5\u05d7\u05e8'
 
 def generate_market_report(report_type='morning'):
     if report_type == 'morning':
@@ -69,7 +71,7 @@ def send_telegram(text, chat_id=None):
     url = 'https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendMessage'
     try:
         r = requests.post(url, json={'chat_id': cid, 'text': text}, timeout=10)
-        logger.info('Telegram send: %s', r.status_code)
+        logger.info('Telegram: %s', r.status_code)
     except Exception as e:
         logger.error('Telegram error: %s', str(e))
 
@@ -86,7 +88,7 @@ def webhook():
         if data and 'message' in data:
             cid = str(data['message']['chat']['id'])
             text = data['message'].get('text', '')
-            logger.info('Msg: %s from %s', text[:50], cid)
+            logger.info('Msg from %s: %s', cid, text[:50])
             if text:
                 resp = call_gemini(text, max_tokens=300)
                 send_telegram(resp, chat_id=cid)
