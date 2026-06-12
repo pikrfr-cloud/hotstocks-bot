@@ -42,22 +42,32 @@ def build_prompt(user_text, report_type=None):
         )
     return (
         'אתה בוט שוק ההון בסגנון הוט סטוק. '
-        'ענה תמיד בעברית בלבד, ללא אמוגים. '
+        'ענה תמיד בעברית בלבד, ללא אמוגים, קצר ומקצועי. '
         'אם ההודעה לא ברורה - פרש אותה כשאלה על שוק ההון וענה. '
         f'בסיום כתוב בדיוק:\n{footer}\n\n'
         f'הודעה: {user_text}'
     )
 
 
-def call_gemini(prompt, max_tokens=600):
+def call_gemini(prompt, max_tokens=2000):
     if not GEMINI_API_KEY:
         return 'שגיאה: מפתח API חסר'
     for model in MODELS:
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}'
-        data = {
-            'contents': [{'parts': [{'text': prompt}]}],
-            'generationConfig': {'maxOutputTokens': max_tokens}
-        }
+        # For gemini-2.5-flash, disable thinking to save tokens
+        if '2.5' in model:
+            data = {
+                'contents': [{'parts': [{'text': prompt}]}],
+                'generationConfig': {
+                    'maxOutputTokens': max_tokens,
+                    'thinkingConfig': {'thinkingBudget': 0}
+                }
+            }
+        else:
+            data = {
+                'contents': [{'parts': [{'text': prompt}]}],
+                'generationConfig': {'maxOutputTokens': max_tokens}
+            }
         try:
             resp = requests.post(url, json=data, timeout=60)
             logger.info('Gemini %s: %s', model, resp.status_code)
@@ -66,8 +76,8 @@ def call_gemini(prompt, max_tokens=600):
                 if 'hotstocks' not in text:
                     text += SIGN
                 return text
-            elif resp.status_code == 429:
-                logger.warning('Rate limited on %s, trying next', model)
+            elif resp.status_code in (429, 503):
+                logger.warning('Unavailable on %s (%s), trying next', model, resp.status_code)
                 continue
             else:
                 logger.error('Error on %s: %s', model, resp.text[:100])
@@ -91,11 +101,11 @@ def send_telegram(text, chat_id=None):
 
 
 def send_morning_report():
-    send_telegram(call_gemini(build_prompt(None, 'morning'), max_tokens=800))
+    send_telegram(call_gemini(build_prompt(None, 'morning'), max_tokens=2000))
 
 
 def send_closing_report():
-    send_telegram(call_gemini(build_prompt(None, 'closing'), max_tokens=800))
+    send_telegram(call_gemini(build_prompt(None, 'closing'), max_tokens=2000))
 
 
 @app.route('/webhook', methods=['POST'])
@@ -108,7 +118,7 @@ def webhook():
             logger.info('Msg from %s: %s', cid, text[:80])
             if text:
                 prompt = build_prompt(text)
-                resp = call_gemini(prompt, max_tokens=500)
+                resp = call_gemini(prompt, max_tokens=2000)
                 send_telegram(resp, chat_id=cid)
     except Exception as e:
         logger.error('Webhook error: %s', str(e))
